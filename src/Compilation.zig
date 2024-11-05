@@ -2427,9 +2427,8 @@ fn flush(
     if (comp.bin_file) |lf| {
         // This is needed before reading the error flags.
         lf.flush(arena, tid, prog_node) catch |err| switch (err) {
-            error.FlushFailure, error.LinkFailure => {}, // error reported through link_diags.flags
-            error.LLDReportedFailure => {}, // error reported via lockAndParseLldStderr
-            else => |e| return e,
+            error.LinkFailure => {}, // Already reported.
+            error.OutOfMemory => return error.OutOfMemory,
         };
     }
 

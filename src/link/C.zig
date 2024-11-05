@@ -175,21 +175,13 @@ pub fn deinit(self: *C) void {
     self.lazy_code_buf.deinit(gpa);
 }
 
-pub fn freeDecl(self: *C, decl_index: InternPool.DeclIndex) void {
-    const gpa = self.base.comp.gpa;
-    if (self.decl_table.fetchSwapRemove(decl_index)) |kv| {
-        var decl_block = kv.value;
-        decl_block.deinit(gpa);
-    }
-}
-
 pub fn updateFunc(
     self: *C,
     pt: Zcu.PerThread,
     func_index: InternPool.Index,
     air: Air,
     liveness: Liveness,
-) !void {
+) link.File.UpdateNavError!void {
     const zcu = pt.zcu;
     const gpa = zcu.gpa;
     const func = zcu.funcInfo(func_index);
@@ -311,7 +303,7 @@ fn updateUav(self: *C, pt: Zcu.PerThread, i: usize) !void {
     };
 }
 
-pub fn updateNav(self: *C, pt: Zcu.PerThread, nav_index: InternPool.Nav.Index) !void {
+pub fn updateNav(self: *C, pt: Zcu.PerThread, nav_index: InternPool.Nav.Index) link.File.UpdateNavError!void {
     const tracy = trace(@src());
     defer tracy.end();
 
@@ -379,15 +371,7 @@ pub fn updateNav(self: *C, pt: Zcu.PerThread, nav_index: InternPool.Nav.Index) !
     gop.value_ptr.fwd_decl = try self.addString(object.dg.fwd_decl.items);
 }
 
-pub fn updateNavLineNumber(self: *C, pt: Zcu.PerThread, nav_index: InternPool.Nav.Index) !void {
-    // The C backend does not have the ability to fix line numbers without re-generating
-    // the entire Decl.
-    _ = self;
-    _ = pt;
-    _ = nav_index;
-}
-
-pub fn flush(self: *C, arena: Allocator, tid: Zcu.PerThread.Id, prog_node: std.Progress.Node) !void {
+pub fn flush(self: *C, arena: Allocator, tid: Zcu.PerThread.Id, prog_node: std.Progress.Node) link.File.FlushError!void {
     return self.flushModule(arena, tid, prog_node);
 }
 
@@ -406,7 +390,7 @@ fn abiDefines(self: *C, target: std.Target) !std.ArrayList(u8) {
     return defines;
 }
 
-pub fn flushModule(self: *C, arena: Allocator, tid: Zcu.PerThread.Id, prog_node: std.Progress.Node) !void {
+pub fn flushModule(self: *C, arena: Allocator, tid: Zcu.PerThread.Id, prog_node: std.Progress.Node) link.File.FlushError!void {
     _ = arena; // Has the same lifetime as the call to Compilation.update.
 
     const tracy = trace(@src());
@@ -416,6 +400,7 @@ pub fn flushModule(self: *C, arena: Allocator, tid: Zcu.PerThread.Id, prog_node:
     defer sub_prog_node.end();
 
     const comp = self.base.comp;
+    const diags = &comp.link_diags;
     const gpa = comp.gpa;
     const zcu = self.base.comp.zcu.?;
     const ip = &zcu.intern_pool;
@@ -552,8 +537,10 @@ pub fn flushModule(self: *C, arena: Allocator, tid: Zcu.PerThread.Id, prog_node:
     );
 
     const file = self.base.file.?;
-    try file.setEndPos(f.file_size);
-    try file.pwritevAll(f.all_buffers.items, 0);
+    file.setEndPos(f.file_size) catch |err| return diags.fail("failed to allocate file: {s}", .{@errorName(err)});
+    file.pwritevAll(f.all_buffers.items, 0) catch |err| return diags.fail("failed to write to '{'}': {s}", .{
+        self.base.emit, @errorName(err),
+    });
 }
 
 const Flush = struct {
