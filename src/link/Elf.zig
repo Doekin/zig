@@ -575,7 +575,7 @@ fn detectAllocCollision(self: *Elf, start: u64, size: u64) !?u64 {
         }
     }
 
-    if (at_end) try self.base.file.?.setEndPos(end);
+    if (at_end) try self.setEndPos(end);
     return null;
 }
 
@@ -638,7 +638,7 @@ pub fn growSection(self: *Elf, shdr_index: u32, needed_size: u64, min_alignment:
 
             shdr.sh_offset = new_offset;
         } else if (shdr.sh_offset + allocated_size == std.math.maxInt(u64)) {
-            try self.base.file.?.setEndPos(shdr.sh_offset + needed_size);
+            try self.setEndPos(shdr.sh_offset + needed_size);
         }
     }
 
@@ -960,7 +960,7 @@ pub fn flushModule(self: *Elf, arena: Allocator, tid: Zcu.PerThread.Id, prog_nod
                 },
                 else => |e| return e,
             };
-            try self.base.file.?.pwriteAll(code, file_offset);
+            try self.pwriteAll(code, file_offset);
         }
 
         if (has_reloc_errors) return error.LinkFailure;
@@ -2115,7 +2115,7 @@ pub fn writeShdrTable(self: *Elf) !void {
                     mem.byteSwapAllFields(elf.Elf32_Shdr, shdr);
                 }
             }
-            try self.base.file.?.pwriteAll(mem.sliceAsBytes(buf), self.shdr_table_offset.?);
+            try self.pwriteAll(mem.sliceAsBytes(buf), self.shdr_table_offset.?);
         },
         .p64 => {
             const buf = try gpa.alloc(elf.Elf64_Shdr, self.sections.items(.shdr).len);
@@ -2128,7 +2128,7 @@ pub fn writeShdrTable(self: *Elf) !void {
                     mem.byteSwapAllFields(elf.Elf64_Shdr, shdr);
                 }
             }
-            try self.base.file.?.pwriteAll(mem.sliceAsBytes(buf), self.shdr_table_offset.?);
+            try self.pwriteAll(mem.sliceAsBytes(buf), self.shdr_table_offset.?);
         },
     }
 }
@@ -2155,7 +2155,7 @@ fn writePhdrTable(self: *Elf) !void {
                     mem.byteSwapAllFields(elf.Elf32_Phdr, phdr);
                 }
             }
-            try self.base.file.?.pwriteAll(mem.sliceAsBytes(buf), phdr_table.p_offset);
+            try self.pwriteAll(mem.sliceAsBytes(buf), phdr_table.p_offset);
         },
         .p64 => {
             const buf = try gpa.alloc(elf.Elf64_Phdr, self.phdrs.items.len);
@@ -2167,7 +2167,7 @@ fn writePhdrTable(self: *Elf) !void {
                     mem.byteSwapAllFields(elf.Elf64_Phdr, phdr);
                 }
             }
-            try self.base.file.?.pwriteAll(mem.sliceAsBytes(buf), phdr_table.p_offset);
+            try self.pwriteAll(mem.sliceAsBytes(buf), phdr_table.p_offset);
         },
     }
 }
@@ -2317,7 +2317,7 @@ pub fn writeElfHeader(self: *Elf) !void {
 
     assert(index == e_ehsize);
 
-    try self.base.file.?.pwriteAll(hdr_buf[0..index], 0);
+    try self.pwriteAll(hdr_buf[0..index], 0);
 }
 
 pub fn freeNav(self: *Elf, nav: InternPool.Nav.Index) void {
@@ -2495,8 +2495,8 @@ pub fn writeMergeSections(self: *Elf) !void {
 
     for (self.merge_sections.items) |*msec| {
         const shdr = self.sections.items(.shdr)[msec.output_section_index];
-        const fileoff = math.cast(usize, msec.value + shdr.sh_offset) orelse return error.Overflow;
-        const size = math.cast(usize, msec.size) orelse return error.Overflow;
+        const fileoff = try self.cast(usize, msec.value + shdr.sh_offset);
+        const size = try self.cast(usize, msec.size);
         try buffer.ensureTotalCapacity(size);
         buffer.appendNTimesAssumeCapacity(0, size);
 
@@ -2504,11 +2504,11 @@ pub fn writeMergeSections(self: *Elf) !void {
             const msub = msec.mergeSubsection(msub_index);
             assert(msub.alive);
             const string = msub.getString(self);
-            const off = math.cast(usize, msub.value) orelse return error.Overflow;
+            const off = try self.cast(usize, msub.value);
             @memcpy(buffer.items[off..][0..string.len], string);
         }
 
-        try self.base.file.?.pwriteAll(buffer.items, fileoff);
+        try self.pwriteAll(buffer.items, fileoff);
         buffer.clearRetainingCapacity();
     }
 }
@@ -3680,7 +3680,7 @@ fn writeAtoms(self: *Elf) !void {
             const offset = @as(u64, @intCast(th.value)) + shdr.sh_offset;
             try th.write(self, buffer.writer());
             assert(buffer.items.len == thunk_size);
-            try self.base.file.?.pwriteAll(buffer.items, offset);
+            try self.pwriteAll(buffer.items, offset);
             buffer.clearRetainingCapacity();
         }
     }
@@ -3788,12 +3788,12 @@ fn writeSyntheticSections(self: *Elf) !void {
         const contents = buffer[0 .. interp.len + 1];
         const shdr = slice.items(.shdr)[shndx];
         assert(shdr.sh_size == contents.len);
-        try self.base.file.?.pwriteAll(contents, shdr.sh_offset);
+        try self.pwriteAll(contents, shdr.sh_offset);
     }
 
     if (self.section_indexes.hash) |shndx| {
         const shdr = slice.items(.shdr)[shndx];
-        try self.base.file.?.pwriteAll(self.hash.buffer.items, shdr.sh_offset);
+        try self.pwriteAll(self.hash.buffer.items, shdr.sh_offset);
     }
 
     if (self.section_indexes.gnu_hash) |shndx| {
@@ -3801,12 +3801,12 @@ fn writeSyntheticSections(self: *Elf) !void {
         var buffer = try std.ArrayList(u8).initCapacity(gpa, self.gnu_hash.size());
         defer buffer.deinit();
         try self.gnu_hash.write(self, buffer.writer());
-        try self.base.file.?.pwriteAll(buffer.items, shdr.sh_offset);
+        try self.pwriteAll(buffer.items, shdr.sh_offset);
     }
 
     if (self.section_indexes.versym) |shndx| {
         const shdr = slice.items(.shdr)[shndx];
-        try self.base.file.?.pwriteAll(mem.sliceAsBytes(self.versym.items), shdr.sh_offset);
+        try self.pwriteAll(mem.sliceAsBytes(self.versym.items), shdr.sh_offset);
     }
 
     if (self.section_indexes.verneed) |shndx| {
@@ -3814,7 +3814,7 @@ fn writeSyntheticSections(self: *Elf) !void {
         var buffer = try std.ArrayList(u8).initCapacity(gpa, self.verneed.size());
         defer buffer.deinit();
         try self.verneed.write(buffer.writer());
-        try self.base.file.?.pwriteAll(buffer.items, shdr.sh_offset);
+        try self.pwriteAll(buffer.items, shdr.sh_offset);
     }
 
     if (self.section_indexes.dynamic) |shndx| {
@@ -3822,7 +3822,7 @@ fn writeSyntheticSections(self: *Elf) !void {
         var buffer = try std.ArrayList(u8).initCapacity(gpa, self.dynamic.size(self));
         defer buffer.deinit();
         try self.dynamic.write(self, buffer.writer());
-        try self.base.file.?.pwriteAll(buffer.items, shdr.sh_offset);
+        try self.pwriteAll(buffer.items, shdr.sh_offset);
     }
 
     if (self.section_indexes.dynsymtab) |shndx| {
@@ -3830,12 +3830,12 @@ fn writeSyntheticSections(self: *Elf) !void {
         var buffer = try std.ArrayList(u8).initCapacity(gpa, self.dynsym.size());
         defer buffer.deinit();
         try self.dynsym.write(self, buffer.writer());
-        try self.base.file.?.pwriteAll(buffer.items, shdr.sh_offset);
+        try self.pwriteAll(buffer.items, shdr.sh_offset);
     }
 
     if (self.section_indexes.dynstrtab) |shndx| {
         const shdr = slice.items(.shdr)[shndx];
-        try self.base.file.?.pwriteAll(self.dynstrtab.items, shdr.sh_offset);
+        try self.pwriteAll(self.dynstrtab.items, shdr.sh_offset);
     }
 
     if (self.section_indexes.eh_frame) |shndx| {
@@ -3845,21 +3845,21 @@ fn writeSyntheticSections(self: *Elf) !void {
             break :existing_size sym.atom(self).?.size;
         };
         const shdr = slice.items(.shdr)[shndx];
-        const sh_size = math.cast(usize, shdr.sh_size) orelse return error.Overflow;
+        const sh_size = try self.cast(usize, shdr.sh_size);
         var buffer = try std.ArrayList(u8).initCapacity(gpa, @intCast(sh_size - existing_size));
         defer buffer.deinit();
         try eh_frame.writeEhFrame(self, buffer.writer());
         assert(buffer.items.len == sh_size - existing_size);
-        try self.base.file.?.pwriteAll(buffer.items, shdr.sh_offset + existing_size);
+        try self.pwriteAll(buffer.items, shdr.sh_offset + existing_size);
     }
 
     if (self.section_indexes.eh_frame_hdr) |shndx| {
         const shdr = slice.items(.shdr)[shndx];
-        const sh_size = math.cast(usize, shdr.sh_size) orelse return error.Overflow;
+        const sh_size = try self.cast(usize, shdr.sh_size);
         var buffer = try std.ArrayList(u8).initCapacity(gpa, sh_size);
         defer buffer.deinit();
         try eh_frame.writeEhFrameHdr(self, buffer.writer());
-        try self.base.file.?.pwriteAll(buffer.items, shdr.sh_offset);
+        try self.pwriteAll(buffer.items, shdr.sh_offset);
     }
 
     if (self.section_indexes.got) |index| {
@@ -3867,7 +3867,7 @@ fn writeSyntheticSections(self: *Elf) !void {
         var buffer = try std.ArrayList(u8).initCapacity(gpa, self.got.size(self));
         defer buffer.deinit();
         try self.got.write(self, buffer.writer());
-        try self.base.file.?.pwriteAll(buffer.items, shdr.sh_offset);
+        try self.pwriteAll(buffer.items, shdr.sh_offset);
     }
 
     if (self.section_indexes.rela_dyn) |shndx| {
@@ -3875,7 +3875,7 @@ fn writeSyntheticSections(self: *Elf) !void {
         try self.got.addRela(self);
         try self.copy_rel.addRela(self);
         self.sortRelaDyn();
-        try self.base.file.?.pwriteAll(mem.sliceAsBytes(self.rela_dyn.items), shdr.sh_offset);
+        try self.pwriteAll(mem.sliceAsBytes(self.rela_dyn.items), shdr.sh_offset);
     }
 
     if (self.section_indexes.plt) |shndx| {
@@ -3883,7 +3883,7 @@ fn writeSyntheticSections(self: *Elf) !void {
         var buffer = try std.ArrayList(u8).initCapacity(gpa, self.plt.size(self));
         defer buffer.deinit();
         try self.plt.write(self, buffer.writer());
-        try self.base.file.?.pwriteAll(buffer.items, shdr.sh_offset);
+        try self.pwriteAll(buffer.items, shdr.sh_offset);
     }
 
     if (self.section_indexes.got_plt) |shndx| {
@@ -3891,7 +3891,7 @@ fn writeSyntheticSections(self: *Elf) !void {
         var buffer = try std.ArrayList(u8).initCapacity(gpa, self.got_plt.size(self));
         defer buffer.deinit();
         try self.got_plt.write(self, buffer.writer());
-        try self.base.file.?.pwriteAll(buffer.items, shdr.sh_offset);
+        try self.pwriteAll(buffer.items, shdr.sh_offset);
     }
 
     if (self.section_indexes.plt_got) |shndx| {
@@ -3899,13 +3899,13 @@ fn writeSyntheticSections(self: *Elf) !void {
         var buffer = try std.ArrayList(u8).initCapacity(gpa, self.plt_got.size(self));
         defer buffer.deinit();
         try self.plt_got.write(self, buffer.writer());
-        try self.base.file.?.pwriteAll(buffer.items, shdr.sh_offset);
+        try self.pwriteAll(buffer.items, shdr.sh_offset);
     }
 
     if (self.section_indexes.rela_plt) |shndx| {
         const shdr = slice.items(.shdr)[shndx];
         try self.plt.addRela(self);
-        try self.base.file.?.pwriteAll(mem.sliceAsBytes(self.rela_plt.items), shdr.sh_offset);
+        try self.pwriteAll(mem.sliceAsBytes(self.rela_plt.items), shdr.sh_offset);
     }
 
     try self.writeSymtab();
@@ -3917,7 +3917,7 @@ pub fn writeShStrtab(self: *Elf) !void {
     if (self.section_indexes.shstrtab) |index| {
         const shdr = self.sections.items(.shdr)[index];
         log.debug("writing .shstrtab from 0x{x} to 0x{x}", .{ shdr.sh_offset, shdr.sh_offset + shdr.sh_size });
-        try self.base.file.?.pwriteAll(self.shstrtab.items, shdr.sh_offset);
+        try self.pwriteAll(self.shstrtab.items, shdr.sh_offset);
     }
 }
 
@@ -3932,7 +3932,7 @@ pub fn writeSymtab(self: *Elf) !void {
         .p32 => @sizeOf(elf.Elf32_Sym),
         .p64 => @sizeOf(elf.Elf64_Sym),
     };
-    const nsyms = math.cast(usize, @divExact(symtab_shdr.sh_size, sym_size)) orelse return error.Overflow;
+    const nsyms = try self.cast(usize, @divExact(symtab_shdr.sh_size, sym_size));
 
     log.debug("writing {d} symbols in .symtab from 0x{x} to 0x{x}", .{
         nsyms,
@@ -3945,7 +3945,7 @@ pub fn writeSymtab(self: *Elf) !void {
     });
 
     try self.symtab.resize(gpa, nsyms);
-    const needed_strtab_size = math.cast(usize, strtab_shdr.sh_size - 1) orelse return error.Overflow;
+    const needed_strtab_size = try self.cast(usize, strtab_shdr.sh_size - 1);
     // TODO we could resize instead and in ZigObject/Object always access as slice
     self.strtab.clearRetainingCapacity();
     self.strtab.appendAssumeCapacity(0);
@@ -4014,17 +4014,17 @@ pub fn writeSymtab(self: *Elf) !void {
                 };
                 if (foreign_endian) mem.byteSwapAllFields(elf.Elf32_Sym, out);
             }
-            try self.base.file.?.pwriteAll(mem.sliceAsBytes(buf), symtab_shdr.sh_offset);
+            try self.pwriteAll(mem.sliceAsBytes(buf), symtab_shdr.sh_offset);
         },
         .p64 => {
             if (foreign_endian) {
                 for (self.symtab.items) |*sym| mem.byteSwapAllFields(elf.Elf64_Sym, sym);
             }
-            try self.base.file.?.pwriteAll(mem.sliceAsBytes(self.symtab.items), symtab_shdr.sh_offset);
+            try self.pwriteAll(mem.sliceAsBytes(self.symtab.items), symtab_shdr.sh_offset);
         },
     }
 
-    try self.base.file.?.pwriteAll(self.strtab.items, strtab_shdr.sh_offset);
+    try self.pwriteAll(self.strtab.items, strtab_shdr.sh_offset);
 }
 
 /// Always 4 or 8 depending on whether this is 32-bit ELF or 64-bit ELF.
@@ -5186,6 +5186,30 @@ fn createThunks(elf_file: *Elf, atom_list: *AtomList) !void {
 pub fn stringTableLookup(strtab: []const u8, off: u32) [:0]const u8 {
     const slice = strtab[off..];
     return slice[0..mem.indexOfScalar(u8, slice, 0).? :0];
+}
+
+pub fn pwriteAll(elf_file: *Elf, bytes: []const u8, offset: u64) error{LinkFailure}!void {
+    const comp = elf_file.base.comp;
+    const diags = &comp.link_diags;
+    elf_file.base.file.?.pwriteAll(bytes, offset) catch |err| {
+        return diags.fail("failed to write: {s}", .{@errorName(err)});
+    };
+}
+
+pub fn setEndPos(elf_file: *Elf, length: u64) error{LinkFailure}!void {
+    const comp = elf_file.base.comp;
+    const diags = &comp.link_diags;
+    elf_file.base.file.?.setEndPos(length) catch |err| {
+        return diags.fail("failed to set file end pos: {s}", .{@errorName(err)});
+    };
+}
+
+pub fn cast(elf_file: *Elf, comptime T: type, x: anytype) error{LinkFailure}!T {
+    return std.math.cast(T, x) orelse {
+        const comp = elf_file.base.comp;
+        const diags = &comp.link_diags;
+        return diags.fail("encountered {d}, overflowing {d}-bit value", .{ x, @bitSizeOf(T) });
+    };
 }
 
 const std = @import("std");
