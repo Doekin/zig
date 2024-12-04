@@ -20,12 +20,24 @@ debug_rnglists: DebugRngLists,
 debug_str: StringSection,
 
 pub const UpdateError = error{
-    /// Indicates the error is already reported on `failed_codegen` in the Zcu.
     CodegenFail,
+    ReinterpretDeclRef,
+    Unimplemented,
     OutOfMemory,
-};
+    EndOfStream,
+    Overflow,
+    Underflow,
+    UnexpectedEndOfFile,
+} ||
+    std.fs.File.OpenError ||
+    std.fs.File.SetEndPosError ||
+    std.fs.File.CopyRangeError ||
+    std.fs.File.PReadError ||
+    std.fs.File.PWriteError;
 
-pub const FlushError = UpdateError || std.process.GetCwdError;
+pub const FlushError =
+    UpdateError ||
+    std.process.GetCwdError;
 
 pub const RelocError =
     std.fs.File.PWriteError;
@@ -544,14 +556,13 @@ const Unit = struct {
 
     fn move(unit: *Unit, sec: *Section, dwarf: *Dwarf, new_off: u32) UpdateError!void {
         if (unit.off == new_off) return;
-        const diags = &dwarf.bin_file.base.comp.link_diags;
-        const n = dwarf.getFile().?.copyRangeAll(
+        const n = try dwarf.getFile().?.copyRangeAll(
             sec.off(dwarf) + unit.off,
             dwarf.getFile().?,
             sec.off(dwarf) + new_off,
             unit.len,
-        ) catch |err| return diags.fail("failed to copy file range: {s}", .{@errorName(err)});
-        if (n != unit.len) return diags.fail("unexpected short write from copy file range", .{});
+        );
+        if (n != unit.len) return error.InputOutput;
         unit.off = new_off;
     }
 
@@ -2143,7 +2154,7 @@ pub fn deinit(dwarf: *Dwarf) void {
     dwarf.* = undefined;
 }
 
-fn getUnit(dwarf: *Dwarf, mod: *Module) UpdateError!Unit.Index {
+fn getUnit(dwarf: *Dwarf, mod: *Module) !Unit.Index {
     const mod_gop = try dwarf.mods.getOrPut(dwarf.gpa, mod);
     const unit: Unit.Index = @enumFromInt(mod_gop.index);
     if (!mod_gop.found_existing) {
@@ -2203,7 +2214,25 @@ fn getModInfo(dwarf: *Dwarf, unit: Unit.Index) *ModInfo {
     return &dwarf.mods.values()[@intFromEnum(unit)];
 }
 
-pub fn initWipNav(dwarf: *Dwarf, pt: Zcu.PerThread, nav_index: InternPool.Nav.Index, sym_index: u32) UpdateError!?WipNav {
+pub fn initWipNav(
+    dwarf: *Dwarf,
+    pt: Zcu.PerThread,
+    nav_index: InternPool.Nav.Index,
+    sym_index: u32,
+) error{ OutOfMemory, CodegenFail }!?WipNav {
+    return initWipNavInner(dwarf, pt, nav_index, sym_index) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.CodegenFail => return error.CodegenFail,
+        else => |e| return pt.zcu.codegenFail(nav_index, "failed to init dwarf: {s}", .{@errorName(e)}),
+    };
+}
+
+fn initWipNavInner(
+    dwarf: *Dwarf,
+    pt: Zcu.PerThread,
+    nav_index: InternPool.Nav.Index,
+    sym_index: u32,
+) !?WipNav {
     const zcu = pt.zcu;
     const ip = &zcu.intern_pool;
 
@@ -2457,13 +2486,29 @@ pub fn initWipNav(dwarf: *Dwarf, pt: Zcu.PerThread, nav_index: InternPool.Nav.In
     return wip_nav;
 }
 
+const Sym = struct { index: u32, addr: u64, size: u64 };
+
 pub fn finishWipNav(
     dwarf: *Dwarf,
     pt: Zcu.PerThread,
     nav_index: InternPool.Nav.Index,
-    sym: struct { index: u32, addr: u64, size: u64 },
+    sym: Sym,
     wip_nav: *WipNav,
-) UpdateError!void {
+) error{ OutOfMemory, CodegenFail }!void {
+    return finishWipNavInner(dwarf, pt, nav_index, sym, wip_nav) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.CodegenFail => return error.CodegenFail,
+        else => |e| return pt.zcu.codegenFail(nav_index, "failed to finish dwarf: {s}", .{@errorName(e)}),
+    };
+}
+
+fn finishWipNavInner(
+    dwarf: *Dwarf,
+    pt: Zcu.PerThread,
+    nav_index: InternPool.Nav.Index,
+    sym: Sym,
+    wip_nav: *WipNav,
+) !void {
     const zcu = pt.zcu;
     const ip = &zcu.intern_pool;
     const nav = ip.getNav(nav_index);
@@ -2562,7 +2607,15 @@ pub fn finishWipNav(
     try wip_nav.updateLazy(zcu.navSrcLoc(nav_index));
 }
 
-pub fn updateComptimeNav(dwarf: *Dwarf, pt: Zcu.PerThread, nav_index: InternPool.Nav.Index) UpdateError!void {
+pub fn updateComptimeNav(dwarf: *Dwarf, pt: Zcu.PerThread, nav_index: InternPool.Nav.Index) error{ OutOfMemory, CodegenFail }!void {
+    return updateComptimeNavInner(dwarf, pt, nav_index) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.CodegenFail => return error.CodegenFail,
+        else => |e| return pt.zcu.codegenFail(nav_index, "failed to update dwarf: {s}", .{@errorName(e)}),
+    };
+}
+
+fn updateComptimeNavInner(dwarf: *Dwarf, pt: Zcu.PerThread, nav_index: InternPool.Nav.Index) !void {
     const zcu = pt.zcu;
     const ip = &zcu.intern_pool;
     const nav_src_loc = zcu.navSrcLoc(nav_index);
@@ -4226,7 +4279,7 @@ fn refAbbrevCode(dwarf: *Dwarf, abbrev_code: AbbrevCode) UpdateError!@typeInfo(A
     return @intFromEnum(abbrev_code);
 }
 
-pub fn flushModule(dwarf: *Dwarf, pt: Zcu.PerThread) !void {
+pub fn flushModule(dwarf: *Dwarf, pt: Zcu.PerThread) FlushError!void {
     const zcu = pt.zcu;
     const ip = &zcu.intern_pool;
 
