@@ -1776,7 +1776,7 @@ pub fn updateExports(
             break :blk self.navs.getPtr(nav).?;
         },
         .uav => |uav| self.uavs.getPtr(uav) orelse blk: {
-            const first_exp = zcu.all_exports.items[export_indices[0]];
+            const first_exp = export_indices[0].ptr(zcu);
             const res = try self.lowerUav(elf_file, pt, uav, .none, first_exp.src);
             switch (res) {
                 .mcv => {},
@@ -1797,7 +1797,7 @@ pub fn updateExports(
     const esym_shndx = self.symtab.items(.shndx)[esym_index];
 
     for (export_indices) |export_idx| {
-        const exp = zcu.all_exports.items[export_idx];
+        const exp = export_idx.ptr(zcu);
         if (exp.opts.section.unwrap()) |section_name| {
             if (!section_name.eqlSlice(".text", &zcu.intern_pool)) {
                 try zcu.failed_exports.ensureUnusedCapacity(zcu.gpa, 1);
