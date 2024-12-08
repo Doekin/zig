@@ -1117,8 +1117,8 @@ pub fn updateFunc(
     const atom_index = try coff.getOrCreateAtomForNav(nav_index);
     coff.freeRelocations(atom_index);
 
-    var code_buffer = std.ArrayList(u8).init(gpa);
-    defer code_buffer.deinit();
+    var code_buffer: std.ArrayListUnmanaged(u8) = .empty;
+    defer code_buffer.deinit(gpa);
 
     codegen.generateFunction(
         &coff.base,
@@ -1165,8 +1165,8 @@ fn lowerConst(
 ) !LowerConstResult {
     const gpa = coff.base.comp.gpa;
 
-    var code_buffer = std.ArrayList(u8).init(gpa);
-    defer code_buffer.deinit();
+    var code_buffer: std.ArrayListUnmanaged(u8) = .empty;
+    defer code_buffer.deinit(gpa);
 
     const atom_index = try coff.createAtom();
     const sym = coff.getAtom(atom_index).getSymbolPtr(coff);
@@ -1233,8 +1233,8 @@ pub fn updateNav(
         coff.freeRelocations(atom_index);
         const atom = coff.getAtom(atom_index);
 
-        var code_buffer = std.ArrayList(u8).init(gpa);
-        defer code_buffer.deinit();
+        var code_buffer: std.ArrayListUnmanaged(u8) = .empty;
+        defer code_buffer.deinit(gpa);
 
         try codegen.generateSymbol(
             &coff.base,
@@ -1263,8 +1263,8 @@ fn updateLazySymbolAtom(
     const gpa = comp.gpa;
 
     var required_alignment: InternPool.Alignment = .none;
-    var code_buffer = std.ArrayList(u8).init(gpa);
-    defer code_buffer.deinit();
+    var code_buffer: std.ArrayListUnmanaged(u8) = .empty;
+    defer code_buffer.deinit(gpa);
 
     const name = try allocPrint(gpa, "__lazy_{s}_{}", .{
         @tagName(sym.kind),
